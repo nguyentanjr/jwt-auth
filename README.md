@@ -1,78 +1,198 @@
-🔐 Authentication & Authorization Flow
-1️⃣ Login Flow
+# 🔐 Authentication Flow Documentation
 
-Client gửi login request (username/password) đến Controller.
+## Overview
+This document describes the complete authentication flow implementation including login, registration, token refresh, logout, and security mechanisms.
 
-Controller gọi AuthenticationManager để xác thực thông tin.
+## 📋 Table of Contents
+- [Login Flow](#-login-flow)
+- [Registration Flow](#-registration-flow)
+- [Token Refresh Flow](#-token-refresh-flow)
+- [Logout Flow](#-logout-flow)
+- [Token Rotation Security](#-token-rotation-security)
 
-Xử lý kết quả:
+---
 
-❌ Nếu không hợp lệ → throw exception, thông báo login thất bại.
+## 🔑 Login Flow
 
-✅ Nếu hợp lệ:
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant Ctrl as Controller
+    participant AM as AuthenticationManager
+    participant DB as Database
+    participant SC as SecurityContext
 
-Tạo Access Token (AT) và Refresh Token (RT).
+    C->>Ctrl: Login Request (username/password)
+    Ctrl->>AM: Authenticate credentials
+    AM-->>Ctrl: Authentication result
+    
+    alt Authentication Failed
+        Ctrl-->>C: Exception + Login failed message
+    else Authentication Success
+        Ctrl->>DB: Generate Access Token (AT) & Refresh Token (RT)
+        Ctrl->>C: Set RT in Cookie + AT in Response
+        Note over C: Store AT in Local Storage
+        Ctrl->>SC: Save Authentication to SecurityContextHolder
+        Ctrl-->>C: Success Response
+        C->>C: Redirect to Home
+    end
+```
 
-Lưu RT vào cookie và AT vào local storage của client.
+### Implementation Steps:
+1. **Client** sends login request with username/password to **Controller**
+2. **Controller** calls **AuthenticationManager** to validate credentials
+3. **Process Result**:
+   - ❌ **Invalid**: Throw exception → Login failed notification
+   - ✅ **Valid**: 
+     - Generate Access Token (AT) and Refresh Token (RT)
+     - Store RT in HTTP-only cookie
+     - Return AT to client (stored in local storage)
+     - Save Authentication in SecurityContextHolder
+     - Redirect client to Home page
 
-Lưu Authentication vào SecurityContextHolder để backend biết user đang đăng nhập.
+---
 
-Trả về response → client chuyển hướng đến Home.
+## 📝 Registration Flow
 
-2️⃣ Register Flow
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant Ctrl as Controller
+    participant DB as Database
+    participant SC as SecurityContext
 
-Client gửi register request đến Controller.
+    C->>Ctrl: Registration Request
+    Ctrl->>DB: Check if user exists
+    
+    alt User Exists
+        Ctrl-->>C: Exception + Registration failed message
+    else User Not Exists
+        Ctrl->>DB: Save user data
+        Ctrl->>SC: Create & save Authentication
+        Ctrl->>DB: Generate AT & RT
+        Ctrl->>C: Set RT in Cookie + AT in Response
+        Note over C: Store AT in Local Storage
+        Ctrl-->>C: Success Response
+        C->>C: Redirect to Home
+    end
+```
 
-Controller kiểm tra user đã tồn tại:
+### Implementation Steps:
+1. **Client** sends registration request to **Controller**
+2. **Controller** checks if user already exists:
+   - ❌ **Exists**: Throw exception → Registration failed notification
+   - ✅ **Valid**:
+     - Save user data to database
+     - Create and save Authentication in SecurityContextHolder
+     - Generate Access Token and Refresh Token
+     - Store tokens (RT in cookie, AT in local storage)
+     - Redirect client to Home page
 
-❌ Nếu tồn tại → throw exception, thông báo không thể đăng ký.
+---
 
-✅ Nếu hợp lệ:
+## 🔄 Token Refresh Flow
 
-Lưu user data vào DB.
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant Ctrl as Controller
+    participant DB as Database
 
-Lưu Authentication vào SecurityContextHolder.
+    C->>Ctrl: Refresh Token Request
+    Ctrl->>Ctrl: Extract RT from Cookie
+    Ctrl->>DB: Validate Refresh Token
+    
+    alt RT Invalid
+        Ctrl-->>C: Exception + Token invalid
+    else RT Valid
+        Note over Ctrl,DB: Token Rotation Process
+        Ctrl->>DB: Revoke old RT (mark as used)
+        Ctrl->>DB: Generate new AT & RT
+        Ctrl->>C: Set new RT in Cookie + new AT in Response
+        Note over C: Store new AT in Local Storage
+        Ctrl-->>C: Success Response
+    end
+```
 
-Tạo AT và RT, lưu vào local storage + cookie.
+### Implementation Steps:
+1. **Client** sends refresh token request
+2. **Server** extracts RT from HTTP-only cookie
+3. **Validate RT**:
+   - ❌ **Invalid**: Throw exception
+   - ✅ **Valid**: Execute rotation process:
+     - Revoke old RT and mark as used (prevents replay attacks)
+     - Generate new Access Token and Refresh Token
+     - Store new tokens (RT in cookie, AT in local storage)
+     - Return success response → Client continues with new AT
 
-Client được chuyển hướng đến Home.
+---
 
-3️⃣ Refresh Token Flow
+## 🚪 Logout Flow
 
-Client gửi refresh token request.
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant Ctrl as Controller
+    participant DB as Database
 
-Server lấy RT từ cookie và kiểm tra:
+    C->>Ctrl: Logout Request
+    Ctrl->>Ctrl: Extract RT from Cookie
+    Ctrl->>Ctrl: Clear RT Cookie
+    Ctrl->>DB: Revoke RT in Database
+    Note over C: Clear AT from Local Storage
+    Ctrl-->>C: Logout Success
+    Note over C: User completely logged out
+```
 
-❌ Nếu không hợp lệ → throw exception.
+### Implementation Steps:
+1. **Client** initiates logout request
+2. **Server** processes logout:
+   - Extract RT from cookie
+   - Clear RT from HTTP-only cookie
+   - Revoke RT in database (invalidate token)
+3. **Client** clears Access Token from local storage
+4. **Result**: User is completely logged out, all tokens are invalidated
 
-✅ Nếu hợp lệ → thực hiện rotation:
+---
 
-Revoke RT cũ (đánh dấu là used để chống replay attack).
+## 🔒 Token Rotation Security
 
-Tạo AT mới và RT mới, lưu vào cookie/local storage.
+### Why Token Rotation?
+Token rotation is a critical security mechanism that ensures each Refresh Token can only be used once.
 
-Trả response → client tiếp tục sử dụng AT mới.
+### How It Works:
+```mermaid
+graph TD
+    A[RT Used for Refresh] --> B[Revoke Old RT]
+    B --> C[Mark as 'Used' in DB]
+    C --> D[Generate New RT]
+    D --> E[Send New RT to Client]
+    E --> F[Old RT Cannot Be Reused]
+```
 
-4️⃣ Logout Flow
+### Security Benefits:
+- **🛡️ Replay Attack Prevention**: Each RT is single-use only
+- **🔍 Breach Detection**: Reuse of revoked tokens indicates compromise
+- **⏰ Limited Exposure Window**: Stolen tokens have minimal lifetime
+- **🔄 Automatic Invalidation**: Regular token renewal reduces risk
 
-Client gửi logout request.
+### Implementation Details:
+1. **Before Rotation**: Validate current RT
+2. **During Rotation**: 
+   - Revoke old RT (set status to 'used')
+   - Generate new RT with fresh expiration
+3. **After Rotation**: Old RT becomes permanently invalid
 
-Server lấy RT từ cookie và thực hiện:
+---
 
-Xóa RT trong cookie.
+## 🏗️ Architecture Components
 
-Revoke RT trong DB → token không còn hợp lệ.
+| Component | Responsibility |
+|-----------|---------------|
+| **Controller** | Handle HTTP requests/responses |
+| **AuthenticationManager** | Validate user credentials |
+| **SecurityContextHolder** | Manage authentication state |
+| **Token Service** | Generate/validate/revoke tokens |
+| **Database** | Store user data and token metadata |
 
-Xóa AT trong local storage.
-
-Kết quả: user hoàn toàn bị logout, không thể sử dụng token cũ.
-
-5️⃣ Refresh Token Rotation
-
-Khi refresh token được dùng:
-
-Revoke RT cũ (invalidate trong DB).
-
-Grant RT mới → gửi về client.
-
-Mục tiêu: đảm bảo mỗi RT chỉ dùng một lần → tăng cường bảo mật.
+---
